@@ -72,8 +72,8 @@ public class AddExtraOptionalGettersTest extends org.apache.avro.specific.Specif
     return DECODER.decode(b);
   }
 
-   private java.lang.CharSequence name;
-   private java.lang.Integer favorite_number;
+  private java.lang.CharSequence name;
+  private java.lang.Integer favorite_number;
 
   /**
    * Default constructor.  Note that this does not initialize fields
@@ -207,7 +207,7 @@ public class AddExtraOptionalGettersTest extends org.apache.avro.specific.Specif
 
     /** Creates a new Builder */
     private Builder() {
-      super(SCHEMA$);
+      super(SCHEMA$, MODEL$);
     }
 
     /**
@@ -231,7 +231,7 @@ public class AddExtraOptionalGettersTest extends org.apache.avro.specific.Specif
      * @param other The existing instance to copy.
      */
     private Builder(avro.examples.baseball.AddExtraOptionalGettersTest other) {
-      super(SCHEMA$);
+      super(SCHEMA$, MODEL$);
       if (isValidValue(fields()[0], other.name)) {
         this.name = data().deepCopy(fields()[0].schema(), other.name);
         fieldSetFlags()[0] = true;

@@ -72,10 +72,10 @@ public class OptionalGettersAllFieldsTest extends org.apache.avro.specific.Speci
     return DECODER.decode(b);
   }
 
-   private java.lang.CharSequence name;
-   private java.lang.CharSequence nullable_name;
-   private java.lang.Object favorite_number;
-   private java.lang.Integer nullable_favorite_number;
+  private java.lang.CharSequence name;
+  private java.lang.CharSequence nullable_name;
+  private java.lang.Object favorite_number;
+  private java.lang.Integer nullable_favorite_number;
 
   /**
    * Default constructor.  Note that this does not initialize fields
@@ -239,7 +239,7 @@ public class OptionalGettersAllFieldsTest extends org.apache.avro.specific.Speci
 
     /** Creates a new Builder */
     private Builder() {
-      super(SCHEMA$);
+      super(SCHEMA$, MODEL$);
     }
 
     /**
@@ -271,7 +271,7 @@ public class OptionalGettersAllFieldsTest extends org.apache.avro.specific.Speci
      * @param other The existing instance to copy.
      */
     private Builder(avro.examples.baseball.OptionalGettersAllFieldsTest other) {
-      super(SCHEMA$);
+      super(SCHEMA$, MODEL$);
       if (isValidValue(fields()[0], other.name)) {
         this.name = data().deepCopy(fields()[0].schema(), other.name);
         fieldSetFlags()[0] = true;
