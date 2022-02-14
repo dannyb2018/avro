@@ -19,13 +19,13 @@ public class NoSettersTest extends org.apache.avro.specific.SpecificRecordBase i
   public static final org.apache.avro.Schema SCHEMA$ = new org.apache.avro.Schema.Parser().parse("{\"type\":\"record\",\"name\":\"NoSettersTest\",\"namespace\":\"avro.examples.baseball\",\"doc\":\"Test that setters are omitted\",\"fields\":[{\"name\":\"name\",\"type\":\"string\"},{\"name\":\"favorite_number\",\"type\":[\"int\",\"null\"]}]}");
   public static org.apache.avro.Schema getClassSchema() { return SCHEMA$; }
 
-  private static SpecificData MODEL$ = new SpecificData();
+  private static final SpecificData MODEL$ = new SpecificData();
 
   private static final BinaryMessageEncoder<NoSettersTest> ENCODER =
-      new BinaryMessageEncoder<NoSettersTest>(MODEL$, SCHEMA$);
+      new BinaryMessageEncoder<>(MODEL$, SCHEMA$);
 
   private static final BinaryMessageDecoder<NoSettersTest> DECODER =
-      new BinaryMessageDecoder<NoSettersTest>(MODEL$, SCHEMA$);
+      new BinaryMessageDecoder<>(MODEL$, SCHEMA$);
 
   /**
    * Return the BinaryMessageEncoder instance used by this class.
@@ -49,7 +49,7 @@ public class NoSettersTest extends org.apache.avro.specific.SpecificRecordBase i
    * @return a BinaryMessageDecoder instance for this class backed by the given SchemaStore
    */
   public static BinaryMessageDecoder<NoSettersTest> createDecoder(SchemaStore resolver) {
-    return new BinaryMessageDecoder<NoSettersTest>(MODEL$, SCHEMA$, resolver);
+    return new BinaryMessageDecoder<>(MODEL$, SCHEMA$, resolver);
   }
 
   /**

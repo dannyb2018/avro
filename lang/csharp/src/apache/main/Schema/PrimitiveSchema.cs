@@ -16,8 +16,7 @@
  * limitations under the License.
  */
 using System;
-using System.Collections.Generic;
-using System.Text;
+using System.Linq;
 using Newtonsoft.Json;
 
 namespace Avro
@@ -82,7 +81,22 @@ namespace Avro
         /// <param name="encspace"></param>
         protected internal override void WriteJson(JsonTextWriter w, SchemaNames names, string encspace)
         {
-            w.WriteValue(Name);
+            if(this.Props?.Any() == true)
+            {
+                w.WriteStartObject();
+                w.WritePropertyName("type");
+                w.WriteValue(Name);
+                foreach(var prop in Props)
+                {
+                    w.WritePropertyName(prop.Key);
+                    w.WriteRawValue(prop.Value);
+                }
+                w.WriteEndObject();
+            }
+            else
+            {
+                w.WriteValue(Name);
+            }
         }
 
         /// <summary>
@@ -132,6 +146,26 @@ namespace Avro
         public override int GetHashCode()
         {
             return 13 * Tag.GetHashCode() + getHashCode(Props);
+        }
+
+        /// <summary>
+        /// Returns the canonical JSON representation of this schema.
+        /// </summary>
+        /// <returns>The canonical JSON representation of this schema.</returns>
+        public override string ToString()
+        {
+            using (System.IO.StringWriter sw = new System.IO.StringWriter())
+            using (Newtonsoft.Json.JsonTextWriter writer = new Newtonsoft.Json.JsonTextWriter(sw))
+            {
+                writer.WriteStartObject();
+                writer.WritePropertyName("type");
+
+                WriteJson(writer, new SchemaNames(), null); // stand alone schema, so no enclosing name space
+
+                writer.WriteEndObject();
+
+                return sw.ToString();
+            }
         }
     }
 }

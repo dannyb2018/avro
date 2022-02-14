@@ -19,13 +19,13 @@ public class AddExtraOptionalGettersTest extends org.apache.avro.specific.Specif
   public static final org.apache.avro.Schema SCHEMA$ = new org.apache.avro.Schema.Parser().parse("{\"type\":\"record\",\"name\":\"AddExtraOptionalGettersTest\",\"namespace\":\"avro.examples.baseball\",\"doc\":\"Test that extra optional getters are added\",\"fields\":[{\"name\":\"name\",\"type\":\"string\"},{\"name\":\"favorite_number\",\"type\":[\"int\",\"null\"]}]}");
   public static org.apache.avro.Schema getClassSchema() { return SCHEMA$; }
 
-  private static SpecificData MODEL$ = new SpecificData();
+  private static final SpecificData MODEL$ = new SpecificData();
 
   private static final BinaryMessageEncoder<AddExtraOptionalGettersTest> ENCODER =
-      new BinaryMessageEncoder<AddExtraOptionalGettersTest>(MODEL$, SCHEMA$);
+      new BinaryMessageEncoder<>(MODEL$, SCHEMA$);
 
   private static final BinaryMessageDecoder<AddExtraOptionalGettersTest> DECODER =
-      new BinaryMessageDecoder<AddExtraOptionalGettersTest>(MODEL$, SCHEMA$);
+      new BinaryMessageDecoder<>(MODEL$, SCHEMA$);
 
   /**
    * Return the BinaryMessageEncoder instance used by this class.
@@ -49,7 +49,7 @@ public class AddExtraOptionalGettersTest extends org.apache.avro.specific.Specif
    * @return a BinaryMessageDecoder instance for this class backed by the given SchemaStore
    */
   public static BinaryMessageDecoder<AddExtraOptionalGettersTest> createDecoder(SchemaStore resolver) {
-    return new BinaryMessageDecoder<AddExtraOptionalGettersTest>(MODEL$, SCHEMA$, resolver);
+    return new BinaryMessageDecoder<>(MODEL$, SCHEMA$, resolver);
   }
 
   /**

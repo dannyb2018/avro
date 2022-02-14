@@ -411,21 +411,20 @@ class ProtocolParseTestCase(unittest.TestCase):
         """Parsing a valid protocol should not error."""
         try:
             self.test_proto.parse()
-        except avro.errors.ProtocolParseException:
+        except avro.errors.ProtocolParseException:  # pragma: no coverage
             self.fail(f"Valid protocol failed to parse: {self.test_proto!s}")
 
     def parse_invalid(self):
-        """Parsing an invalid schema should error."""
-        try:
+        """Parsing an invalid protocol should error."""
+        with self.assertRaises(
+            (avro.errors.ProtocolParseException, avro.errors.SchemaParseException),
+            msg=f"Invalid protocol should not have parsed: {self.test_proto!s}",
+        ):
             self.test_proto.parse()
-        except (avro.errors.ProtocolParseException, avro.errors.SchemaParseException):
-            pass
-        else:
-            self.fail(f"Invalid protocol should not have parsed: {self.test_proto!s}")
 
 
-class ErrorSchemaTestCase(unittest.TestCase):
-    """Enable generating error schema test cases across all the valid test protocols."""
+class ErrorProtocolTestCase(unittest.TestCase):
+    """Enable generating error protocol test cases across all the valid test protocols."""
 
     def __init__(self, test_proto):
         """Ignore the normal signature for unittest.TestCase because we are generating
@@ -433,14 +432,15 @@ class ErrorSchemaTestCase(unittest.TestCase):
         ignores this class. The autoloader will ignore this class as long as it has
         no methods starting with `test_`.
         """
-        super().__init__("check_error_schema_exists")
+        super().__init__("check_error_protocol_exists")
         self.test_proto = test_proto
 
-    def check_error_schema_exists(self):
-        """Protocol messages should always have at least a string error schema."""
+    def check_error_protocol_exists(self):
+        """Protocol messages should always have at least a string error protocol."""
         p = self.test_proto.parse()
-        for k, m in p.messages.items():
-            self.assertIsNotNone(m.errors, f"Message {k} did not have the expected implicit string error schema.")
+        if p.messages is not None:
+            for k, m in p.messages.items():
+                self.assertIsNotNone(m.errors, f"Message {k} did not have the expected implicit string error protocol.")
 
 
 class RoundTripParseTestCase(unittest.TestCase):
@@ -456,20 +456,21 @@ class RoundTripParseTestCase(unittest.TestCase):
         self.test_proto = test_proto
 
     def parse_round_trip(self):
-        """The string of a Schema should be parseable to the same Schema."""
+        """The string of a Protocol should be parseable to the same Protocol."""
         parsed = self.test_proto.parse()
         round_trip = avro.protocol.parse(str(parsed))
         self.assertEqual(parsed, round_trip)
 
 
 def load_tests(loader, default_tests, pattern):
-    """Generate test cases across many test schema."""
+    """Generate test cases across many test protocol."""
     suite = unittest.TestSuite()
     suite.addTests(loader.loadTestsFromTestCase(TestMisc))
     suite.addTests(ProtocolParseTestCase(ex) for ex in EXAMPLES)
     suite.addTests(RoundTripParseTestCase(ex) for ex in VALID_EXAMPLES)
+    suite.addTests(ErrorProtocolTestCase(ex) for ex in VALID_EXAMPLES)
     return suite
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no coverage
     unittest.main()

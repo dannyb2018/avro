@@ -49,6 +49,7 @@ import java.util.Set;
 import org.apache.avro.util.internal.Accessor;
 import org.apache.avro.util.internal.Accessor.FieldAccessor;
 import org.apache.avro.util.internal.JacksonUtils;
+import org.apache.avro.util.internal.ThreadLocalWithInitial;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -277,6 +278,13 @@ public abstract class Schema extends JsonProperties implements Serializable {
    * order of their positions.
    */
   public List<Field> getFields() {
+    throw new AvroRuntimeException("Not a record: " + this);
+  }
+
+  /**
+   * If this is a record, returns whether the fields have been set.
+   */
+  public boolean hasFields() {
     throw new AvroRuntimeException("Not a record: " + this);
   }
 
@@ -524,10 +532,10 @@ public abstract class Schema extends JsonProperties implements Serializable {
 
       private final String name;
 
-      private Order() {
+      Order() {
         this.name = this.name().toLowerCase(Locale.ENGLISH);
       }
-    };
+    }
 
     /**
      * For Schema unions with a "null" type as the first entry, this can be used to
@@ -703,7 +711,7 @@ public abstract class Schema extends JsonProperties implements Serializable {
         this.name = validateName(name);
       } else { // qualified name
         space = name.substring(0, lastDot); // get space from name
-        this.name = validateName(name.substring(lastDot + 1, name.length()));
+        this.name = validateName(name.substring(lastDot + 1));
       }
       if ("".equals(space))
         space = null;
@@ -828,7 +836,7 @@ public abstract class Schema extends JsonProperties implements Serializable {
     }
 
     public void aliasesToJson(JsonGenerator gen) throws IOException {
-      if (aliases == null || aliases.size() == 0)
+      if (aliases == null || aliases.isEmpty())
         return;
       gen.writeFieldName("aliases");
       gen.writeStartArray();
@@ -864,8 +872,8 @@ public abstract class Schema extends JsonProperties implements Serializable {
     }
   }
 
-  private static final ThreadLocal<Set> SEEN_EQUALS = ThreadLocal.withInitial(HashSet::new);
-  private static final ThreadLocal<Map> SEEN_HASHCODE = ThreadLocal.withInitial(IdentityHashMap::new);
+  private static final ThreadLocal<Set> SEEN_EQUALS = ThreadLocalWithInitial.of(HashSet::new);
+  private static final ThreadLocal<Map> SEEN_HASHCODE = ThreadLocalWithInitial.of(IdentityHashMap::new);
 
   @SuppressWarnings(value = "unchecked")
   private static class RecordSchema extends NamedSchema {
@@ -901,6 +909,11 @@ public abstract class Schema extends JsonProperties implements Serializable {
       if (fields == null)
         throw new AvroRuntimeException("Schema fields not set yet");
       return fields;
+    }
+
+    @Override
+    public boolean hasFields() {
+      return fields != null;
     }
 
     @Override
@@ -1551,7 +1564,7 @@ public abstract class Schema extends JsonProperties implements Serializable {
     }
   }
 
-  private static ThreadLocal<Boolean> validateNames = ThreadLocal.withInitial(() -> true);
+  private static ThreadLocal<Boolean> validateNames = ThreadLocalWithInitial.of(() -> true);
 
   private static String validateName(String name) {
     if (!validateNames.get())
@@ -1572,7 +1585,7 @@ public abstract class Schema extends JsonProperties implements Serializable {
     return name;
   }
 
-  private static final ThreadLocal<Boolean> VALIDATE_DEFAULTS = ThreadLocal.withInitial(() -> true);
+  private static final ThreadLocal<Boolean> VALIDATE_DEFAULTS = ThreadLocalWithInitial.of(() -> true);
 
   private static JsonNode validateDefault(String fieldName, Schema schema, JsonNode defaultValue) {
     if (VALIDATE_DEFAULTS.get() && (defaultValue != null) && !isValidDefault(schema, defaultValue)) { // invalid default
@@ -1647,19 +1660,23 @@ public abstract class Schema extends JsonProperties implements Serializable {
       Name name = null;
       String savedSpace = names.space();
       String doc = null;
-      if (type.equals("record") || type.equals("error") || type.equals("enum") || type.equals("fixed")) {
+      final boolean isTypeError = "error".equals(type);
+      final boolean isTypeRecord = "record".equals(type);
+      final boolean isTypeEnum = "enum".equals(type);
+      final boolean isTypeFixed = "fixed".equals(type);
+      if (isTypeRecord || isTypeError || isTypeEnum || isTypeFixed) {
         String space = getOptionalText(schema, "namespace");
         doc = getOptionalText(schema, "doc");
         if (space == null)
-          space = names.space();
+          space = savedSpace;
         name = new Name(getRequiredText(schema, "name", "No name in schema"), space);
         names.space(name.space); // set default namespace
       }
       if (PRIMITIVES.containsKey(type)) { // primitive
         result = create(PRIMITIVES.get(type));
-      } else if (type.equals("record") || type.equals("error")) { // record
+      } else if (isTypeRecord || isTypeError) { // record
         List<Field> fields = new ArrayList<>();
-        result = new RecordSchema(name, doc, type.equals("error"));
+        result = new RecordSchema(name, doc, isTypeError);
         if (name != null)
           names.add(result);
         JsonNode fieldsNode = schema.get("fields");
@@ -1673,7 +1690,7 @@ public abstract class Schema extends JsonProperties implements Serializable {
             throw new SchemaParseException("No field type: " + field);
           if (fieldTypeNode.isTextual() && names.get(fieldTypeNode.textValue()) == null)
             throw new SchemaParseException(fieldTypeNode + " is not a defined name." + " The type of the \"" + fieldName
-                + "\" field must be" + " a defined name or a {\"type\": ...} expression.");
+                + "\" field must be a defined name or a {\"type\": ...} expression.");
           Schema fieldSchema = parse(fieldTypeNode, names);
           Field.Order order = Field.Order.ASCENDING;
           JsonNode orderNode = field.get("order");
@@ -1699,7 +1716,7 @@ public abstract class Schema extends JsonProperties implements Serializable {
                 name, fieldName, getOptionalText(field, "logicalType"));
         }
         result.setFields(fields);
-      } else if (type.equals("enum")) { // enum
+      } else if (isTypeEnum) { // enum
         JsonNode symbolsNode = schema.get("symbols");
         if (symbolsNode == null || !symbolsNode.isArray())
           throw new SchemaParseException("Enum has no symbols: " + schema);
@@ -1723,7 +1740,7 @@ public abstract class Schema extends JsonProperties implements Serializable {
         if (valuesNode == null)
           throw new SchemaParseException("Map has no values type: " + schema);
         result = new MapSchema(parse(valuesNode, names));
-      } else if (type.equals("fixed")) { // fixed
+      } else if (isTypeFixed) { // fixed
         JsonNode sizeNode = schema.get("size");
         if (sizeNode == null || !sizeNode.isInt())
           throw new SchemaParseException("Invalid or no size: " + schema);
@@ -1740,7 +1757,7 @@ public abstract class Schema extends JsonProperties implements Serializable {
       Iterator<String> i = schema.fieldNames();
 
       Set reserved = SCHEMA_RESERVED;
-      if (type.equals("enum")) {
+      if (isTypeEnum) {
         reserved = ENUM_RESERVED;
       }
       while (i.hasNext()) { // add properties

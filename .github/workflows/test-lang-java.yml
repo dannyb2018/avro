@@ -38,6 +38,8 @@ jobs:
         java:
         - '8'
         - '11'
+        - '17'
+        - '18-ea'
     steps:
       - uses: actions/checkout@v2
 
@@ -52,7 +54,7 @@ jobs:
       - name: Setup Java
         uses: actions/setup-java@v2
         with:
-          distribution: 'adopt'
+          distribution: 'temurin'
           java-version: ${{ matrix.java }}
 
       - name: Lint
@@ -69,6 +71,7 @@ jobs:
         java:
         - '8'
         - '11'
+        - '17'
     steps:
       - uses: actions/checkout@v2
 
@@ -83,8 +86,23 @@ jobs:
       - name: Setup Java
         uses: actions/setup-java@v2
         with:
-          distribution: 'adopt'
+          distribution: 'temurin'
           java-version: ${{ matrix.java }}
+
+      - name: Setup Python for Generating Input Data
+        uses: actions/setup-python@v2
+
+      - name: Apt Install Compression Libs Required by Python
+        run: |
+          sudo apt-get install -qqy --no-install-recommends libbz2-dev \
+                                                            liblzma-dev \
+                                                            libsnappy-dev \
+                                                            libzstd-dev
+
+      - name: Install Python Dependencies
+        run: |
+          python3 -m pip install --upgrade pip setuptools tox-wheel
+          python3 -m pip install python-snappy zstandard
 
       - name: Install Java Avro for Interop Test
         working-directory: .
@@ -97,6 +115,10 @@ jobs:
       - name: Generate Interop Resources
         working-directory: lang/java/avro
         run: mvn -B -P interop-data-generate generate-resources
+
+      - name: Generate Interop Data using Python
+        working-directory: lang/py
+        run: ./build.sh interop-data-generate
 
       - name: Run Interop Tests
         working-directory: lang/java/ipc

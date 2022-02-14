@@ -85,6 +85,7 @@ FIXED_EXAMPLES = [
 ENUM_EXAMPLES = [
     ValidTestSchema({"type": "enum", "name": "Test", "symbols": ["A", "B"]}),
     ValidTestSchema({"type": "enum", "name": "AVRO2174", "symbols": ["nowhitespace"]}),
+    InvalidTestSchema({"type": "enum", "name": "bad_default", "symbols": ["A"], "default": "B"}, comment="AVRO-3229"),
     InvalidTestSchema({"type": "enum", "name": "Status", "symbols": "Normal Caution Critical"}),
     InvalidTestSchema({"type": "enum", "name": [0, 1, 1, 2, 3, 5, 8], "symbols": ["Golden", "Mean"]}),
     InvalidTestSchema({"type": "enum", "symbols": ["I", "will", "fail", "no", "name"]}),
@@ -623,7 +624,7 @@ class TestMisc(unittest.TestCase):
 
     def test_exception_is_not_swallowed_on_parse_error(self):
         """A specific exception message should appear on a json parse error."""
-        self.assertRaisesRegexp(
+        self.assertRaisesRegex(
             avro.errors.SchemaParseException,
             r"Error parsing JSON: /not/a/real/file",
             avro.schema.parse,
@@ -642,16 +643,16 @@ class TestMisc(unittest.TestCase):
             }
         )
 
-        bytes_decimal_schema = ValidTestSchema({"type": "bytes", "logicalType": "decimal", "precision": 4})
-
         fixed_decimal = fixed_decimal_schema.parse()
         self.assertEqual(4, fixed_decimal.get_prop("precision"))
         self.assertEqual(2, fixed_decimal.get_prop("scale"))
         self.assertEqual(2, fixed_decimal.get_prop("size"))
 
+        bytes_decimal_schema = ValidTestSchema({"type": "bytes", "logicalType": "decimal", "precision": 4})
         bytes_decimal = bytes_decimal_schema.parse()
         self.assertEqual(4, bytes_decimal.get_prop("precision"))
         self.assertEqual(0, bytes_decimal.get_prop("scale"))
+        self.assertEqual("decimal", bytes_decimal.get_prop("logicalType"))
 
     def test_fixed_decimal_valid_max_precision(self):
         # An 8 byte number can represent any 18 digit number.
@@ -691,18 +692,12 @@ class TestMisc(unittest.TestCase):
     def test_parse_invalid_symbol(self):
         """Disabling enumschema symbol validation should allow invalid symbols to pass."""
         test_schema_string = json.dumps({"type": "enum", "name": "AVRO2174", "symbols": ["white space"]})
-
+        with self.assertRaises(avro.errors.InvalidName, msg="When enum symbol validation is enabled, an invalid symbol should raise InvalidName."):
+            avro.schema.parse(test_schema_string, validate_enum_symbols=True)
         try:
-            case = avro.schema.parse(test_schema_string, validate_enum_symbols=True)
-        except avro.errors.InvalidName:
-            pass
-        else:
-            self.fail("When enum symbol validation is enabled, " "an invalid symbol should raise InvalidName.")
-
-        try:
-            case = avro.schema.parse(test_schema_string, validate_enum_symbols=False)
-        except avro.errors.InvalidName:
-            self.fail("When enum symbol validation is disabled, " "an invalid symbol should not raise InvalidName.")
+            avro.schema.parse(test_schema_string, validate_enum_symbols=False)
+        except avro.errors.InvalidName:  # pragma: no coverage
+            self.fail("When enum symbol validation is disabled, an invalid symbol should not raise InvalidName.")
 
 
 class SchemaParseTestCase(unittest.TestCase):
@@ -719,28 +714,28 @@ class SchemaParseTestCase(unittest.TestCase):
         # Never hide repeated warnings when running this test case.
         warnings.simplefilter("always")
 
-    def parse_valid(self):
+    def parse_valid(self) -> None:
         """Parsing a valid schema should not error, but may contain warnings."""
-        with warnings.catch_warnings(record=True) as actual_warnings:
-            try:
-                self.test_schema.parse()
-            except (avro.errors.AvroException, avro.errors.SchemaParseException):
-                self.fail(f"Valid schema failed to parse: {self.test_schema!s}")
-            actual_messages = [str(wmsg.message) for wmsg in actual_warnings]
-            if self.test_schema.warnings:
-                expected_messages = [str(w) for w in self.test_schema.warnings]
-                self.assertEqual(actual_messages, expected_messages)
-            else:
-                self.assertEqual(actual_messages, [])
+        test_warnings = self.test_schema.warnings or []
+        try:
+            warnings.filterwarnings(action="error", category=avro.errors.IgnoredLogicalType)
+            self.test_schema.parse()
+        except (avro.errors.IgnoredLogicalType) as e:
+            self.assertIn(type(e), (type(w) for w in test_warnings))
+            self.assertIn(str(e), (str(w) for w in test_warnings))
+        except (avro.errors.AvroException, avro.errors.SchemaParseException):  # pragma: no coverage
+            self.fail(f"Valid schema failed to parse: {self.test_schema!s}")
+        else:
+            self.assertEqual([], test_warnings)
+        finally:
+            warnings.filterwarnings(action="default", category=avro.errors.IgnoredLogicalType)
 
     def parse_invalid(self):
         """Parsing an invalid schema should error."""
-        try:
+        with self.assertRaises(
+            (avro.errors.AvroException, avro.errors.SchemaParseException), msg=f"Invalid schema should not have parsed: {self.test_schema!s}"
+        ):
             self.test_schema.parse()
-        except (avro.errors.AvroException, avro.errors.SchemaParseException):
-            pass
-        else:
-            self.fail(f"Invalid schema should not have parsed: {self.test_schema!s}")
 
 
 class RoundTripParseTestCase(unittest.TestCase):
@@ -824,7 +819,7 @@ class OtherAttributesTestCase(unittest.TestCase):
         sch = self.test_schema.parse()
         try:
             self.assertNotEqual(sch, object(), "A schema is never equal to a non-schema instance.")
-        except AttributeError:
+        except AttributeError:  # pragma: no coverage
             self.fail("Comparing a schema to a non-schema should be False, but not error.")
         round_trip = avro.schema.parse(str(sch))
         self.assertEqual(
@@ -1256,5 +1251,5 @@ def load_tests(loader, default_tests, pattern):
     return suite
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no coverage
     unittest.main()

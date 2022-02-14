@@ -44,42 +44,19 @@ import datetime
 import decimal
 import json
 import math
-import re
-import sys
 import uuid
 import warnings
+from pathlib import Path
+from typing import Mapping, MutableMapping, Optional, Sequence, Union, cast
 
 import avro.constants
 import avro.errors
+from avro.constants import NAMED_TYPES, PRIMITIVE_TYPES, VALID_TYPES
+from avro.name import Name, Names, validate_basename
 
 #
 # Constants
 #
-
-# The name portion of a fullname, record field names, and enum symbols must:
-# start with [A-Za-z_]
-# subsequently contain only [A-Za-z0-9_]
-_BASE_NAME_PATTERN = re.compile(r"(?:^|\.)[A-Za-z_][A-Za-z0-9_]*$")
-
-PRIMITIVE_TYPES = (
-    "null",
-    "boolean",
-    "string",
-    "bytes",
-    "int",
-    "long",
-    "float",
-    "double",
-)
-
-NAMED_TYPES = (
-    "fixed",
-    "enum",
-    "record",
-    "error",
-)
-
-VALID_TYPES = PRIMITIVE_TYPES + NAMED_TYPES + ("array", "map", "union", "request", "error_union")
 
 SCHEMA_RESERVED_PROPS = (
     "type",
@@ -123,13 +100,7 @@ LONG_MIN_VALUE = -(1 << 63)
 LONG_MAX_VALUE = (1 << 63) - 1
 
 
-def validate_basename(basename):
-    """Raise InvalidName if the given basename is not a valid name."""
-    if not _BASE_NAME_PATTERN.search(basename):
-        raise avro.errors.InvalidName(f"{basename!s} is not a valid Avro name because it does not match the pattern {_BASE_NAME_PATTERN.pattern!s}")
-
-
-def _is_timezone_aware_datetime(dt):
+def _is_timezone_aware_datetime(dt: datetime.datetime) -> bool:
     return dt.tzinfo is not None and dt.tzinfo.utcoffset(dt) is not None
 
 
@@ -138,67 +109,25 @@ def _is_timezone_aware_datetime(dt):
 #
 
 
-class EqualByJsonMixin:
-    """Equal if the json serializations are equal."""
+class PropertiesMixin:
+    """A mixin that provides basic properties."""
 
-    def __eq__(self, that):
-        try:
-            that_str = json.loads(str(that))
-        except json.decoder.JSONDecodeError:
-            return False
-        return json.loads(str(self)) == that_str
-
-
-class EqualByPropsMixin:
-    """Equal if the props are equal."""
-
-    def __eq__(self, that):
-        try:
-            return self.props == that.props
-        except AttributeError:
-            return False
-
-
-class CanonicalPropertiesMixin:
-    """A Mixin that provides canonical properties to Schema and Field types."""
+    _reserved_properties: Sequence[str] = ()
+    _props: Optional[MutableMapping[str, object]] = None
 
     @property
-    def canonical_properties(self):
-        props = self.props
-        return collections.OrderedDict((key, props[key]) for key in CANONICAL_FIELD_ORDER if key in props)
-
-
-class Schema(abc.ABC, CanonicalPropertiesMixin):
-    """Base class for all Schema classes."""
-
-    _props = None
-
-    def __init__(self, type, other_props=None):
-        # Ensure valid ctor args
-        if not isinstance(type, str):
-            fail_msg = "Schema type must be a string."
-            raise avro.errors.SchemaParseException(fail_msg)
-        elif type not in VALID_TYPES:
-            fail_msg = f"{type} is not a valid type."
-            raise avro.errors.SchemaParseException(fail_msg)
-
-        # add members
+    def props(self) -> MutableMapping[str, object]:
         if self._props is None:
             self._props = {}
-        self.set_prop("type", type)
-        self.type = type
-        self._props.update(other_props or {})
-
-    @property
-    def props(self):
         return self._props
 
-    @property
-    def other_props(self):
-        """Dictionary of non-reserved properties"""
-        return get_other_props(self.props, SCHEMA_RESERVED_PROPS)
+    def get_prop(self, key: str) -> Optional[object]:
+        return self.props.get(key)
 
-    def check_props(self, other, props):
+    def set_prop(self, key: str, value: object) -> None:
+        self.props[key] = value
+
+    def check_props(self, other: "PropertiesMixin", props: Sequence[str]) -> bool:
         """Check that the given props are identical in two schemas.
 
         @arg other: The other schema to check
@@ -207,26 +136,66 @@ class Schema(abc.ABC, CanonicalPropertiesMixin):
         """
         return all(getattr(self, prop) == getattr(other, prop) for prop in props)
 
+    @property
+    def other_props(self) -> Mapping[str, object]:
+        """Dictionary of non-reserved properties"""
+        return get_other_props(self.props, self._reserved_properties)
+
+
+class EqualByJsonMixin:
+    """A mixin that defines equality as equal if the json deserializations are equal."""
+
+    def __eq__(self, that: object) -> bool:
+        try:
+            that_obj = json.loads(str(that))
+        except json.decoder.JSONDecodeError:
+            return False
+        return cast(bool, json.loads(str(self)) == that_obj)
+
+
+class EqualByPropsMixin(PropertiesMixin):
+    """A mixin that defines equality as equal if the props are equal."""
+
+    def __eq__(self, that: object) -> bool:
+        return hasattr(that, "props") and self.props == getattr(that, "props")
+
+
+class CanonicalPropertiesMixin(PropertiesMixin):
+    """A Mixin that provides canonical properties to Schema and Field types."""
+
+    @property
+    def canonical_properties(self) -> Mapping[str, object]:
+        props = self.props
+        return collections.OrderedDict((key, props[key]) for key in CANONICAL_FIELD_ORDER if key in props)
+
+
+class Schema(abc.ABC, CanonicalPropertiesMixin):
+    """Base class for all Schema classes."""
+
+    _reserved_properties = SCHEMA_RESERVED_PROPS
+
+    def __init__(self, type_: str, other_props: Optional[Mapping[str, object]] = None) -> None:
+        if not isinstance(type_, str):
+            raise avro.errors.SchemaParseException("Schema type must be a string.")
+        if type_ not in VALID_TYPES:
+            raise avro.errors.SchemaParseException(f"{type_} is not a valid type.")
+        self.set_prop("type", type_)
+        self.type = type_
+        self.props.update(other_props or {})
+
     @abc.abstractmethod
-    def match(self, writer):
+    def match(self, writer: "Schema") -> bool:
         """Return True if the current schema (as reader) matches the writer schema.
 
         @arg writer: the writer schema to match against.
         @return bool
         """
 
-    # utility functions to manipulate properties dict
-    def get_prop(self, key):
-        return self._props.get(key)
-
-    def set_prop(self, key, value):
-        self._props[key] = value
-
-    def __str__(self):
+    def __str__(self) -> str:
         return json.dumps(self.to_json())
 
     @abc.abstractmethod
-    def to_json(self, names):
+    def to_json(self, names: Optional[Names] = None) -> object:
         """
         Converts the schema object into its AVRO specification representation.
 
@@ -236,7 +205,7 @@ class Schema(abc.ABC, CanonicalPropertiesMixin):
         """
 
     @abc.abstractmethod
-    def validate(self, datum):
+    def validate(self, datum: object) -> Optional["Schema"]:
         """Returns the appropriate schema object if datum is valid for that schema, else None.
 
         To be implemented in subclasses.
@@ -250,7 +219,7 @@ class Schema(abc.ABC, CanonicalPropertiesMixin):
         """
 
     @abc.abstractmethod
-    def to_canonical_json(self, names=None):
+    def to_canonical_json(self, names: Optional[Names] = None) -> object:
         """
         Converts the schema object into its Canonical Form
         http://avro.apache.org/docs/current/spec.html#Parsing+Canonical+Form+for+Schemas
@@ -259,164 +228,38 @@ class Schema(abc.ABC, CanonicalPropertiesMixin):
         """
 
     @property
-    def canonical_form(self):
+    def canonical_form(self) -> str:
         # The separators eliminate whitespace around commas and colons.
         return json.dumps(self.to_canonical_json(), separators=(",", ":"))
 
     @abc.abstractmethod
-    def __eq__(self, that):
+    def __eq__(self, that: object) -> bool:
         """
         Determines how two schema are compared.
         Consider the mixins EqualByPropsMixin and EqualByJsonMixin
         """
 
 
-class Name:
-    """Class to describe Avro name."""
-
-    _full = None
-
-    def __init__(self, name_attr, space_attr, default_space):
-        """The fullname is determined in one of the following ways:
-
-        - A name and namespace are both specified. For example, one might use "name": "X",
-            "namespace": "org.foo" to indicate the fullname org.foo.X.
-        - A fullname is specified. If the name specified contains a dot,
-            then it is assumed to be a fullname, and any namespace also specified is ignored.
-            For example, use "name": "org.foo.X" to indicate the fullname org.foo.X.
-        - A name only is specified, i.e., a name that contains no dots.
-            In this case the namespace is taken from the most tightly enclosing schema or protocol.
-            For example, if "name": "X" is specified, and this occurs within a field of
-            the record definition of org.foo.Y, then the fullname is org.foo.X.
-            If there is no enclosing namespace then the null namespace is used.
-
-        References to previously defined names are as in the latter two cases above:
-        if they contain a dot they are a fullname,
-        if they do not contain a dot, the namespace is the namespace of the enclosing definition.
-
-        @arg name_attr: name value read in schema or None.
-        @arg space_attr: namespace value read in schema or None. The empty string may be used as a namespace
-            to indicate the null namespace.
-        @arg default_space: the current default space or None.
-        """
-        if name_attr is None:
-            return
-        if name_attr == "":
-            raise avro.errors.SchemaParseException("Name must not be the empty string.")
-
-        if "." in name_attr or space_attr == "" or not (space_attr or default_space):
-            # The empty string may be used as a namespace to indicate the null namespace.
-            self._full = name_attr
-        else:
-            self._full = f"{space_attr or default_space!s}.{name_attr!s}"
-
-        self._validate_fullname(self._full)
-
-    def _validate_fullname(self, fullname):
-        for name in fullname.split("."):
-            validate_basename(name)
-
-    def __eq__(self, other):
-        """Equality of names is defined on the fullname and is case-sensitive."""
-        try:
-            return self.fullname == other.fullname
-        except AttributeError:
-            return False
-
-    @property
-    def fullname(self):
-        return self._full
-
-    @property
-    def space(self):
-        """Back out a namespace from full name."""
-        if self._full is None:
-            return None
-        return self._full.rsplit(".", 1)[0] if "." in self._full else None
-
-    def get_space(self):
-        warnings.warn("Name.get_space() is deprecated in favor of Name.space")
-        return self.space
-
-
-class Names:
-    """Track name set and default namespace during parsing."""
-
-    def __init__(self, default_namespace=None):
-        self.names = {}
-        self.default_namespace = default_namespace
-
-    def has_name(self, name_attr, space_attr):
-        test = Name(name_attr, space_attr, self.default_namespace).fullname
-        return test in self.names
-
-    def get_name(self, name_attr, space_attr):
-        test = Name(name_attr, space_attr, self.default_namespace).fullname
-        return self.names.get(test)
-
-    def prune_namespace(self, properties):
-        """given a properties, return properties with namespace removed if
-        it matches the own default namespace"""
-        if self.default_namespace is None:
-            # I have no default -- no change
-            return properties
-
-        if "namespace" not in properties:
-            # he has no namespace - no change
-            return properties
-
-        if properties["namespace"] != self.default_namespace:
-            # we're different - leave his stuff alone
-            return properties
-
-        # we each have a namespace and it's redundant. delete his.
-        prunable = properties.copy()
-        del prunable["namespace"]
-        return prunable
-
-    def add_name(self, name_attr, space_attr, new_schema):
-        """
-        Add a new schema object to the name set.
-
-        @arg name_attr: name value read in schema
-        @arg space_attr: namespace value read in schema.
-
-        @return: the Name that was just added.
-        """
-        to_add = Name(name_attr, space_attr, self.default_namespace)
-
-        if to_add.fullname in VALID_TYPES:
-            fail_msg = f"{to_add.fullname} is a reserved type name."
-            raise avro.errors.SchemaParseException(fail_msg)
-        elif to_add.fullname in self.names:
-            fail_msg = f'The name "{to_add.fullname}" is already in use.'
-            raise avro.errors.SchemaParseException(fail_msg)
-
-        self.names[to_add.fullname] = new_schema
-        return to_add
-
-
 class NamedSchema(Schema):
     """Named Schemas specified in NAMED_TYPES."""
 
-    def __init__(self, type, name, namespace=None, names=None, other_props=None):
-        # Ensure valid ctor args
+    def __init__(
+        self,
+        type_: str,
+        name: str,
+        namespace: Optional[str] = None,
+        names: Optional[Names] = None,
+        other_props: Optional[Mapping[str, object]] = None,
+    ) -> None:
+        super().__init__(type_, other_props)
         if not name:
-            fail_msg = "Named Schemas must have a non-empty name."
-            raise avro.errors.SchemaParseException(fail_msg)
-        elif not isinstance(name, str):
-            fail_msg = "The name property must be a string."
-            raise avro.errors.SchemaParseException(fail_msg)
-        elif namespace is not None and not isinstance(namespace, str):
-            fail_msg = "The namespace property must be a string."
-            raise avro.errors.SchemaParseException(fail_msg)
-
+            raise avro.errors.SchemaParseException("Named Schemas must have a non-empty name.")
+        if not isinstance(name, str):
+            raise avro.errors.SchemaParseException("The name property must be a string.")
+        if namespace is not None and not isinstance(namespace, str):
+            raise avro.errors.SchemaParseException("The namespace property must be a string.")
         namespace = namespace or None  # Empty string -> None
-
-        # Call parent ctor
-        Schema.__init__(self, type, other_props)
-
-        # Add class members
+        names = names or Names()
         new_name = names.add_name(name, namespace, self)
 
         # Store name and namespace as they were read in origin schema
@@ -469,9 +312,11 @@ class DecimalLogicalSchema(LogicalSchema):
 
 
 class Field(CanonicalPropertiesMixin, EqualByJsonMixin):
+    _reserved_properties: Sequence[str] = FIELD_RESERVED_PROPS
+
     def __init__(
         self,
-        type,
+        type_,
         name,
         has_default,
         default=None,
@@ -480,30 +325,22 @@ class Field(CanonicalPropertiesMixin, EqualByJsonMixin):
         doc=None,
         other_props=None,
     ):
-        # Ensure valid ctor args
         if not name:
-            fail_msg = "Fields must have a non-empty name."
-            raise avro.errors.SchemaParseException(fail_msg)
-        elif not isinstance(name, str):
-            fail_msg = "The name property must be a string."
-            raise avro.errors.SchemaParseException(fail_msg)
-        elif order is not None and order not in VALID_FIELD_SORT_ORDERS:
-            fail_msg = f"The order property {order} is not valid."
-            raise avro.errors.SchemaParseException(fail_msg)
-
-        # add members
-        self._props = {}
+            raise avro.errors.SchemaParseException("Fields must have a non-empty name.")
+        if not isinstance(name, str):
+            raise avro.errors.SchemaParseException("The name property must be a string.")
+        if order is not None and order not in VALID_FIELD_SORT_ORDERS:
+            raise avro.errors.SchemaParseException(f"The order property {order} is not valid.")
         self._has_default = has_default
-        self._props.update(other_props or {})
+        self.props.update(other_props or {})
 
-        if isinstance(type, str) and names is not None and names.has_name(type, None):
-            type_schema = names.get_name(type, None)
+        if isinstance(type_, str) and names is not None and names.has_name(type_, None):
+            type_schema = names.get_name(type_, None)
         else:
             try:
-                type_schema = make_avsc_object(type, names)
+                type_schema = make_avsc_object(type_, names)
             except Exception as e:
-                fail_msg = f'Type property "{type}" not a valid Avro schema: {e}'
-                raise avro.errors.SchemaParseException(fail_msg)
+                raise avro.errors.SchemaParseException(f'Type property "{type_}" not a valid Avro schema: {e}')
         self.set_prop("type", type_schema)
         self.set_prop("name", name)
         self.type = type_schema
@@ -521,20 +358,6 @@ class Field(CanonicalPropertiesMixin, EqualByJsonMixin):
     has_default = property(lambda self: self._has_default)
     order = property(lambda self: self.get_prop("order"))
     doc = property(lambda self: self.get_prop("doc"))
-    props = property(lambda self: self._props)
-
-    # Read-only property dict. Non-reserved properties
-    other_props = property(
-        lambda self: get_other_props(self._props, FIELD_RESERVED_PROPS),
-        doc="dictionary of non-reserved properties",
-    )
-
-    # utility functions to manipulate properties dict
-    def get_prop(self, key):
-        return self._props.get(key)
-
-    def set_prop(self, key, value):
-        self._props[key] = value
 
     def __str__(self):
         return json.dumps(self.to_json())
@@ -591,18 +414,15 @@ class PrimitiveSchema(EqualByPropsMixin, Schema):
         @arg writer: the schema to match against
         @return bool
         """
-        return (
-            self.type == writer.type
-            or {
-                "float": self.type == "double",
-                "int": self.type in {"double", "float", "long"},
-                "long": self.type
-                in {
-                    "double",
-                    "float",
-                },
-            }.get(writer.type, False)
-        )
+        return self.type == writer.type or {
+            "float": self.type == "double",
+            "int": self.type in {"double", "float", "long"},
+            "long": self.type
+            in {
+                "double",
+                "float",
+            },
+        }.get(writer.type, False)
 
     def to_json(self, names=None):
         if len(self.props) == 1:
@@ -731,14 +551,14 @@ class FixedDecimalSchema(FixedSchema, DecimalLogicalSchema):
 class EnumSchema(EqualByPropsMixin, NamedSchema):
     def __init__(
         self,
-        name,
-        namespace,
-        symbols,
-        names=None,
-        doc=None,
-        other_props=None,
-        validate_enum_symbols=True,
-    ):
+        name: str,
+        namespace: str,
+        symbols: Sequence[str],
+        names: Optional[avro.name.Names] = None,
+        doc: Optional[str] = None,
+        other_props: Optional[Mapping[str, object]] = None,
+        validate_enum_symbols: bool = True,
+    ) -> None:
         """
         @arg validate_enum_symbols: If False, will allow enum symbols that are not valid Avro names.
         """
@@ -750,8 +570,7 @@ class EnumSchema(EqualByPropsMixin, NamedSchema):
                     raise avro.errors.InvalidName("An enum symbol must be a valid schema name.")
 
         if len(set(symbols)) < len(symbols):
-            fail_msg = f"Duplicate symbol: {symbols}"
-            raise avro.errors.AvroException(fail_msg)
+            raise avro.errors.AvroException(f"Duplicate symbol: {symbols}")
 
         # Call parent ctor
         NamedSchema.__init__(self, "enum", name, namespace, names, other_props)
@@ -761,8 +580,18 @@ class EnumSchema(EqualByPropsMixin, NamedSchema):
         if doc is not None:
             self.set_prop("doc", doc)
 
-    # read-only properties
-    symbols = property(lambda self: self.get_prop("symbols"))
+        if other_props and "default" in other_props:
+            default = other_props["default"]
+            if default not in symbols:
+                raise avro.errors.InvalidDefault(f"Enum default '{default}' is not a valid member of symbols '{symbols}'")
+
+    @property
+    def symbols(self) -> Sequence[str]:
+        symbols = self.get_prop("symbols")
+        if isinstance(symbols, Sequence):
+            return symbols
+        raise Exception
+
     doc = property(lambda self: self.get_prop("doc"))
 
     def match(self, writer):
@@ -993,33 +822,28 @@ class ErrorUnionSchema(UnionSchema):
 
 class RecordSchema(EqualByJsonMixin, NamedSchema):
     @staticmethod
-    def make_field_objects(field_data, names):
+    def make_field_objects(field_data: Sequence[Mapping[str, object]], names: avro.name.Names) -> Sequence[Field]:
         """We're going to need to make message parameters too."""
         field_objects = []
         field_names = []
-        for i, field in enumerate(field_data):
-            if callable(getattr(field, "get", None)):
-                type = field.get("type")
-                name = field.get("name")
-
-                # null values can have a default value of None
-                has_default = False
-                default = None
-                if "default" in field:
-                    has_default = True
-                    default = field.get("default")
-
-                order = field.get("order")
-                doc = field.get("doc")
-                other_props = get_other_props(field, FIELD_RESERVED_PROPS)
-                new_field = Field(type, name, has_default, default, order, names, doc, other_props)
-                # make sure field name has not been used yet
-                if new_field.name in field_names:
-                    fail_msg = f"Field name {new_field.name} already in use."
-                    raise avro.errors.SchemaParseException(fail_msg)
-                field_names.append(new_field.name)
-            else:
+        for field in field_data:
+            if not callable(getattr(field, "get", None)):
                 raise avro.errors.SchemaParseException(f"Not a valid field: {field}")
+            type = field.get("type")
+            name = field.get("name")
+
+            # null values can have a default value of None
+            has_default = "default" in field
+            default = field.get("default")
+            order = field.get("order")
+            doc = field.get("doc")
+            other_props = get_other_props(field, FIELD_RESERVED_PROPS)
+            new_field = Field(type, name, has_default, default, order, names, doc, other_props)
+            # make sure field name has not been used yet
+            if new_field.name in field_names:
+                fail_msg = f"Field name {new_field.name} already in use."
+                raise avro.errors.SchemaParseException(fail_msg)
+            field_names.append(new_field.name)
             field_objects.append(new_field)
         return field_objects
 
@@ -1235,18 +1059,17 @@ class UUIDSchema(LogicalSchema, PrimitiveSchema):
 #
 
 
-def get_other_props(all_props, reserved_props):
+def get_other_props(all_props: Mapping[str, object], reserved_props: Sequence[str]) -> Mapping[str, object]:
     """
     Retrieve the non-reserved properties from a dictionary of properties
     @args reserved_props: The set of reserved properties to exclude
     """
-    if callable(getattr(all_props, "items", None)):
-        return {k: v for k, v in all_props.items() if k not in reserved_props}
+    return {k: v for k, v in all_props.items() if k not in reserved_props}
 
 
 def make_bytes_decimal_schema(other_props):
     """Make a BytesDecimalSchema from just other_props."""
-    return BytesDecimalSchema(other_props.get("precision"), other_props.get("scale", 0))
+    return BytesDecimalSchema(other_props.get("precision"), other_props.get("scale", 0), other_props)
 
 
 def make_logical_schema(logical_type, type_, other_props):
@@ -1279,7 +1102,7 @@ def make_logical_schema(logical_type, type_, other_props):
     return None
 
 
-def make_avsc_object(json_data, names=None, validate_enum_symbols=True):
+def make_avsc_object(json_data: object, names: Optional[avro.name.Names] = None, validate_enum_symbols: bool = True) -> Schema:
     """
     Build Avro Schema from data parsed out of JSON string.
 
@@ -1290,19 +1113,22 @@ def make_avsc_object(json_data, names=None, validate_enum_symbols=True):
 
     # JSON object (non-union)
     if callable(getattr(json_data, "get", None)):
-        type = json_data.get("type")
+        json_data = cast(Mapping, json_data)
+        type_ = json_data.get("type")
         other_props = get_other_props(json_data, SCHEMA_RESERVED_PROPS)
         logical_type = json_data.get("logicalType")
 
         if logical_type:
-            logical_schema = make_logical_schema(logical_type, type, other_props or {})
+            logical_schema = make_logical_schema(logical_type, type_, other_props or {})
             if logical_schema is not None:
-                return logical_schema
+                return cast(Schema, logical_schema)
 
-        if type in NAMED_TYPES:
+        if type_ in NAMED_TYPES:
             name = json_data.get("name")
+            if not isinstance(name, str):
+                raise avro.errors.SchemaParseException(f"Name {name} must be a string, but it is {type(name)}.")
             namespace = json_data.get("namespace", names.default_namespace)
-            if type == "fixed":
+            if type_ == "fixed":
                 size = json_data.get("size")
                 if logical_type == "decimal":
                     precision = json_data.get("precision")
@@ -1312,8 +1138,13 @@ def make_avsc_object(json_data, names=None, validate_enum_symbols=True):
                     except avro.errors.IgnoredLogicalType as warning:
                         warnings.warn(warning)
                 return FixedSchema(name, namespace, size, names, other_props)
-            elif type == "enum":
+            elif type_ == "enum":
                 symbols = json_data.get("symbols")
+                if not isinstance(symbols, Sequence):
+                    raise avro.errors.SchemaParseException(f"Enum symbols must be a sequence of strings, but it is {type(symbols)}")
+                for symbol in symbols:
+                    if not isinstance(symbol, str):
+                        raise avro.errors.SchemaParseException(f"Enum symbols must be a sequence of strings, but one symbol is a {type(symbol)}")
                 doc = json_data.get("doc")
                 return EnumSchema(
                     name,
@@ -1324,32 +1155,31 @@ def make_avsc_object(json_data, names=None, validate_enum_symbols=True):
                     other_props,
                     validate_enum_symbols,
                 )
-            elif type in ["record", "error"]:
+            if type_ in ["record", "error"]:
                 fields = json_data.get("fields")
                 doc = json_data.get("doc")
-                return RecordSchema(name, namespace, fields, names, type, doc, other_props)
-            else:
-                raise avro.errors.SchemaParseException(f"Unknown Named Type: {type}")
+                return RecordSchema(name, namespace, fields, names, type_, doc, other_props)
+            raise avro.errors.SchemaParseException(f"Unknown Named Type: {type_}")
 
-        if type in PRIMITIVE_TYPES:
-            return PrimitiveSchema(type, other_props)
+        if type_ in PRIMITIVE_TYPES:
+            return PrimitiveSchema(type_, other_props)
 
-        if type in VALID_TYPES:
-            if type == "array":
+        if type_ in VALID_TYPES:
+            if type_ == "array":
                 items = json_data.get("items")
                 return ArraySchema(items, names, other_props)
-            elif type == "map":
+            elif type_ == "map":
                 values = json_data.get("values")
                 return MapSchema(values, names, other_props)
-            elif type == "error_union":
+            elif type_ == "error_union":
                 declared_errors = json_data.get("declared_errors")
                 return ErrorUnionSchema(declared_errors, names)
             else:
-                raise avro.errors.SchemaParseException(f"Unknown Valid Type: {type}")
-        elif type is None:
+                raise avro.errors.SchemaParseException(f"Unknown Valid Type: {type_}")
+        elif type_ is None:
             raise avro.errors.SchemaParseException(f'No "type" property: {json_data}')
         else:
-            raise avro.errors.SchemaParseException(f"Undefined type: {type}")
+            raise avro.errors.SchemaParseException(f"Undefined type: {type_}")
     # JSON array (union)
     elif isinstance(json_data, list):
         return UnionSchema(json_data, names)
@@ -1357,32 +1187,26 @@ def make_avsc_object(json_data, names=None, validate_enum_symbols=True):
     elif json_data in PRIMITIVE_TYPES:
         return PrimitiveSchema(json_data)
     # not for us!
-    else:
-        fail_msg = f"Could not make an Avro Schema object from {json_data}"
-        raise avro.errors.SchemaParseException(fail_msg)
+    fail_msg = f"Could not make an Avro Schema object from {json_data}"
+    raise avro.errors.SchemaParseException(fail_msg)
 
 
-# TODO(hammer): make method for reading from a file?
-
-
-def parse(json_string, validate_enum_symbols=True):
+def parse(json_string: str, validate_enum_symbols: bool = True) -> Schema:
     """Constructs the Schema from the JSON text.
 
     @arg json_string: The json string of the schema to parse
     @arg validate_enum_symbols: If False, will allow enum symbols that are not valid Avro names.
     @return Schema
     """
-    # parse the JSON
     try:
         json_data = json.loads(json_string)
-    except Exception as e:
-        msg = f"Error parsing JSON: {json_string}, error = {e}"
-        new_exception = avro.errors.SchemaParseException(msg)
-        traceback = sys.exc_info()[2]
-        raise new_exception.with_traceback(traceback)
+    except json.decoder.JSONDecodeError as e:
+        raise avro.errors.SchemaParseException(f"Error parsing JSON: {json_string}, error = {e}") from e
+    return make_avsc_object(json_data, Names(), validate_enum_symbols)
 
-    # Initialize the names object
-    names = Names()
 
-    # construct the Avro Schema object
-    return make_avsc_object(json_data, names, validate_enum_symbols)
+def from_path(path: Union[Path, str], validate_enum_symbols: bool = True) -> Schema:
+    """
+    Constructs the Schema from a path to an avsc (json) file.
+    """
+    return parse(Path(path).read_text(), validate_enum_symbols)
