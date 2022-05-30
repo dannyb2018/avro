@@ -51,6 +51,10 @@ pub enum Error {
     #[error("Value does not match schema")]
     Validation,
 
+    /// Describes errors happened while validating Avro data.
+    #[error("Value does not match schema: Reason: {0}")]
+    ValidationWithReason(String),
+
     #[error("Unable to allocate {desired} bytes (maximum allowed: {maximum})")]
     MemoryAllocation { desired: usize, maximum: usize },
 
@@ -252,11 +256,17 @@ pub enum Error {
     #[error("Unknown primitive type: {0}")]
     ParsePrimitive(String),
 
-    #[error("invalid JSON for {key:?}: {precision:?}")]
-    GetDecimalPrecisionFromJson {
+    #[error("invalid JSON for {key:?}: {value:?}")]
+    GetDecimalMetadataValueFromJson {
         key: String,
-        precision: serde_json::Value,
+        value: serde_json::Value,
     },
+
+    #[error("The decimal precision ({precision}) must be bigger or equal to the scale ({scale})")]
+    DecimalPrecisionLessThanScale { precision: usize, scale: usize },
+
+    #[error("The decimal precision ({precision}) must be a positive number")]
+    DecimalPrecisionMuBePositive { precision: usize },
 
     #[error("Unexpected `type` {0} variant for `logicalType`")]
     GetLogicalTypeVariant(serde_json::Value),
@@ -333,6 +343,9 @@ pub enum Error {
     #[error("wrong magic in header")]
     HeaderMagic,
 
+    #[error("Message Header mismatch. Expected: {0:?}. Actual: {1:?}")]
+    SingleObjectHeaderMismatch([u8; 10], [u8; 10]),
+
     #[error("Failed to get JSON from avro.schema key in map")]
     GetAvroSchemaFromMap,
 
@@ -399,11 +412,18 @@ pub enum Error {
     #[error("Signed decimal bytes length {0} not equal to fixed schema size {1}.")]
     EncodeDecimalAsFixedError(usize, usize),
 
+    #[error("There is no entry for {0} in the lookup table: {1}.")]
+    NoEntryInLookupTable(String, String),
+
     #[error("Can only encode value type {value_kind:?} as one of {supported_schema:?}")]
     EncodeValueAsSchemaError {
         value_kind: ValueKind,
         supported_schema: Vec<SchemaKind>,
     },
+    #[error(
+        "Internal buffer not drained properly. Re-initialize the single object writer struct!"
+    )]
+    IllegalSingleObjectWriterState,
 }
 
 impl serde::ser::Error for Error {
